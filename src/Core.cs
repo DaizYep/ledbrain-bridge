@@ -2,7 +2,7 @@
 //   GET  http://127.0.0.1:47800/        → { app, version, sources: ["NDI · …", "Spout · …"] }
 //   GET  http://127.0.0.1:47800/status  → состояние для окна
 //   WS   ws://127.0.0.1:47800/ws?src=…  → бинарные кадры JPEG; текстом — { w, h, fps, src }
-// Слушает только 127.0.0.1 и принимает страницы led.gladkovegor.ru и localhost. Ничего никуда не отправляет.
+// Слушает только 127.0.0.1 и принимает страницы ledbrain.pro (и прежний led.gladkovegor.ru) и localhost. Ничего никуда не отправляет.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -453,14 +453,14 @@ class SpoutFeed : Feed
 // ---------- сервер ----------
 static class Server
 {
-    public const string Version = "0.3.0";
+    public const string Version = "0.3.1";
     public static int Port = 47800;
     public static bool EN;
     public static string T(string ru, string en) { return EN ? en : ru; }
     public static Action<string> OnLog = s => { };
     public static void Log(string s) { try { OnLog(s); } catch { } }
     const string NdiP = "NDI · ", SpoutP = "Spout · ";
-    static readonly Regex Origins = new Regex(@"^(https://led\.gladkovegor\.ru|http://(localhost|127\.0\.0\.1)(:\d+)?)$");
+    static readonly Regex Origins = new Regex(@"^(https://(www\.)?ledbrain\.pro|https://led\.gladkovegor\.ru|http://(localhost|127\.0\.0\.1)(:\d+)?)$");
     static readonly Dictionary<string, Feed> feeds = new Dictionary<string, Feed>();
     static TcpListener listener;
     public static volatile bool Running;

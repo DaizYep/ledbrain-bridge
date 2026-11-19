@@ -20,11 +20,11 @@ using System.Reflection;
 // сведения о файле: видны в «Свойствах» exe и в окне SmartScreen
 [assembly: AssemblyTitle("LEDBRAIN Bridge")]
 [assembly: AssemblyProduct("LEDBRAIN Bridge")]
-[assembly: AssemblyDescription("NDI and Spout → LEDBRAIN 3D view (led.gladkovegor.ru)")]
+[assembly: AssemblyDescription("NDI and Spout → LEDBRAIN 3D view (ledbrain.pro)")]
 [assembly: AssemblyCompany("LEDBRAIN")]
 [assembly: AssemblyCopyright("© 2026 Egor Gladkov")]
-[assembly: AssemblyVersion("0.3.0.0")]
-[assembly: AssemblyFileVersion("0.3.0.0")]
+[assembly: AssemblyVersion("0.3.1.0")]
+[assembly: AssemblyFileVersion("0.3.1.0")]
 
 static class Program
 {
@@ -75,7 +75,7 @@ class BridgeForm : Form
         Text1 = Color.FromArgb(231, 235, 241), Muted = Color.FromArgb(141, 150, 165), Accent = Color.FromArgb(47, 107, 255),
         Ok = Color.FromArgb(52, 199, 89), Warn = Color.FromArgb(245, 165, 36), Bad = Color.FromArgb(255, 77, 79);
     const int Port = 47800;
-    const string SiteUrl = "https://led.gladkovegor.ru";
+    const string SiteUrl = "https://ledbrain.pro";
 
     readonly string dir = AppDomain.CurrentDomain.BaseDirectory;
     readonly NotifyIcon tray = new NotifyIcon();
