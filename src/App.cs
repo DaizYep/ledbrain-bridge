@@ -23,8 +23,8 @@ using System.Reflection;
 [assembly: AssemblyDescription("NDI and Spout → LEDBRAIN 3D view (ledbrain.pro)")]
 [assembly: AssemblyCompany("LEDBRAIN")]
 [assembly: AssemblyCopyright("© 2026 Egor Gladkov")]
-[assembly: AssemblyVersion("0.3.1.0")]
-[assembly: AssemblyFileVersion("0.3.1.0")]
+[assembly: AssemblyVersion("0.4.0.0")]
+[assembly: AssemblyFileVersion("0.4.0.0")]
 
 static class Program
 {
@@ -33,16 +33,39 @@ static class Program
     [STAThread]
     static void Main()
     {
+        RegisterProtocol();
+        // запуск с сайта ссылкой ledbrain-bridge://start — Bridge уходит сразу в трей, уже запущенный не всплывает
+        bool fromSite = false;
+        foreach (var a in Environment.GetCommandLineArgs()) if (a.StartsWith(Proto + ":", StringComparison.OrdinalIgnoreCase)) fromSite = true;
         bool fresh;
         var single = new Mutex(true, "LEDBRAIN.Bridge.Single", out fresh);
         var showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "LEDBRAIN.Bridge.Show");
-        if (!fresh) { showEvt.Set(); return; } // уже запущен — показать его окно
+        if (!fresh) { if (!fromSite) showEvt.Set(); return; } // уже запущен — показать его окно
         try { SetProcessDPIAware(); } catch { }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         var app = new BridgeForm(showEvt);
         Application.Run(app);
         GC.KeepAlive(single);
+    }
+
+    // ссылка ledbrain-bridge:// — по ней сайт запускает Bridge (кнопка «Bridge» на «Сцене»). Только для текущего пользователя,
+    // без прав администратора; путь обновляется при каждом запуске, так что exe можно переносить
+    public const string Proto = "ledbrain-bridge";
+    static void RegisterProtocol()
+    {
+        try
+        {
+            string exe = Application.ExecutablePath;
+            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\" + Proto))
+            {
+                k.SetValue("", "URL:LEDBRAIN Bridge");
+                k.SetValue("URL Protocol", "");
+                using (var i = k.CreateSubKey("DefaultIcon")) i.SetValue("", "\"" + exe + "\",0");
+                using (var c = k.CreateSubKey(@"shell\open\command")) c.SetValue("", "\"" + exe + "\" --tray \"%1\"");
+            }
+        }
+        catch { }
     }
 }
 
@@ -325,9 +348,11 @@ class BridgeForm : Form
     protected override void SetVisibleCore(bool value)
     {
         // запуск с --tray (автозапуск) — сразу в трей, без окна
-        if (!IsHandleCreated && Array.IndexOf(Environment.GetCommandLineArgs(), "--tray") >= 0) { CreateHandle(); value = false; }
+        // (только первый показ; окно к этому времени уже создано — CreateGraphics в конструкторе, поэтому флаг, а не IsHandleCreated)
+        if (trayStart) { trayStart = false; if (!IsHandleCreated) CreateHandle(); value = false; }
         base.SetVisibleCore(value);
     }
+    bool trayStart = Array.IndexOf(Environment.GetCommandLineArgs(), "--tray") >= 0;
     void ShowWindow() { Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Activate(); }
     void HideToTray()
     {

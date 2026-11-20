@@ -453,7 +453,7 @@ class SpoutFeed : Feed
 // ---------- сервер ----------
 static class Server
 {
-    public const string Version = "0.3.1";
+    public const string Version = "0.4.0";
     public static int Port = 47800;
     public static bool EN;
     public static string T(string ru, string en) { return EN ? en : ru; }
