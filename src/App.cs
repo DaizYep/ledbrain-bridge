@@ -13,6 +13,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
+
 using System.Windows.Forms;
 using Microsoft.Win32;
 using System.Reflection;
@@ -23,8 +24,11 @@ using System.Reflection;
 [assembly: AssemblyDescription("NDI and Spout → LEDBRAIN 3D view (ledbrain.pro)")]
 [assembly: AssemblyCompany("LEDBRAIN")]
 [assembly: AssemblyCopyright("© 2026 Egor Gladkov")]
-[assembly: AssemblyVersion("0.4.0.0")]
-[assembly: AssemblyFileVersion("0.4.0.0")]
+[assembly: AssemblyVersion("0.4.1.0")]
+[assembly: AssemblyFileVersion("0.4.1.0")]
+// DLL по короткому имени (dwmapi, uxtheme, d3d11, NDI) — только из System32 и явно добавленных папок, не из папки exe:
+// Bridge запускают из «Загрузок», подложенная туда DLL выполнилась бы при каждом старте (debugger)
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32 | DllImportSearchPath.UserDirectories)]
 
 static class Program
 {

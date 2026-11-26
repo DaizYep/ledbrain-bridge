@@ -35,7 +35,7 @@ static class Ndi
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern void NDIlib_recv_destroy(IntPtr inst);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern int NDIlib_recv_capture_v2(IntPtr inst, ref Video v, IntPtr a, IntPtr m, uint timeout);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern void NDIlib_recv_free_video_v2(IntPtr inst, ref Video v);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool SetDllDirectory(string dir);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr AddDllDirectory(string dir);
 
     public const int BGRX_BGRA = 0, BW_HIGHEST = 100, FRAME_VIDEO = 1;
     public static string Path = null;
@@ -53,7 +53,7 @@ static class Ndi
         {
             var f = System.IO.Path.Combine(d, Dll);
             if (!File.Exists(f)) continue;
-            SetDllDirectory(d);
+            AddDllDirectory(d); // в поиск — только эта папка; папка exe не участвует (DefaultDllImportSearchPaths в App.cs)
             try
             {
                 if (!NDIlib_initialize()) return false;
@@ -224,6 +224,8 @@ static class Spout
             }
             if (D == null) return false;
             TexDesc desc; VT<GetDescFn>(src, 10)(src, out desc);
+            // 87/88/91 — BGRA/BGRX, 28/29 — RGBA (8 бит на канал): остальное (16/32 бит, сжатые) не читаем
+            if (desc.Format != 87 && desc.Format != 88 && desc.Format != 91 && desc.Format != 28 && desc.Format != 29) { Server.Log("Spout: " + name + " — формат текстуры " + desc.Format + " не поддерживается"); Close(); return false; }
             var sd = new TexDesc { Width = desc.Width, Height = desc.Height, MipLevels = 1, ArraySize = 1, Format = desc.Format, Count = 1, Usage = 3, CPUAccessFlags = 0x20000 };
             IntPtr s;
             if (VT<CreateTexFn>(D.Device, 5)(D.Device, ref sd, IntPtr.Zero, out s) < 0) { Close(); return false; }
@@ -237,16 +239,23 @@ static class Spout
             var I = Info(name);
             if (I == null) return false;
             if (I.Handle != handle || src == IntPtr.Zero) if (!Open(I)) return false;
-            bool locked = mutex != IntPtr.Zero && WaitForSingleObject(mutex, 40) == 0;
-            VT<CopyFn>(D.Ctx, 47)(D.Ctx, stage, src);
-            if (locked) ReleaseMutex(mutex);
-            Mapped m;
-            if (VT<MapFn>(D.Ctx, 14)(D.Ctx, stage, 0, 1, 0, out m) < 0) return false;
-            int n = (int)(m.RowPitch * h);
-            if (buf == null || buf.Length < n) buf = new byte[n];
-            Marshal.Copy(m.pData, buf, 0, n);
-            VT<UnmapFn>(D.Ctx, 15)(D.Ctx, stage, 0);
-            W = (int)w; H = (int)h; pitch = (int)m.RowPitch; rgba = fmt == 28 || fmt == 29;
+            // immediate context D3D11 не потокобезопасен, а устройство общее для всех Spout-приёмников (debugger)
+            lock (D)
+            {
+                bool locked = mutex != IntPtr.Zero && WaitForSingleObject(mutex, 40) == 0;
+                VT<CopyFn>(D.Ctx, 47)(D.Ctx, stage, src);
+                if (locked) ReleaseMutex(mutex);
+                Mapped m;
+                if (VT<MapFn>(D.Ctx, 14)(D.Ctx, stage, 0, 1, 0, out m) < 0) return false;
+                long nl = (long)m.RowPitch * h;
+                if (nl > int.MaxValue) { VT<UnmapFn>(D.Ctx, 15)(D.Ctx, stage, 0); return false; }
+                int n = (int)nl;
+                if (buf == null || buf.Length < n) buf = new byte[n];
+                Marshal.Copy(m.pData, buf, 0, n);
+                VT<UnmapFn>(D.Ctx, 15)(D.Ctx, stage, 0);
+                pitch = (int)m.RowPitch;
+            }
+            W = (int)w; H = (int)h; rgba = fmt == 28 || fmt == 29;
             return true;
         }
         public void Dispose() { Close(); if (mutex != IntPtr.Zero) CloseHandle(mutex); mutex = IntPtr.Zero; }
@@ -315,15 +324,17 @@ class WsClient
     }
     public void SendText(string s) { try { Write(1, Encoding.UTF8.GetBytes(s)); } catch { Close(); } }
     // кадр: если предыдущий ещё уходит — этот пропускаем (медленный клиент не копит очередь)
-    public void SendFrame(string meta, byte[] jpg)
+    // false — кадр пропущен (предыдущий ещё уходит): тогда размер кадра надо прислать со следующим (debugger)
+    public bool SendFrame(string meta, byte[] jpg)
     {
-        if (Closed || Interlocked.CompareExchange(ref sending, 1, 0) != 0) return;
+        if (Closed || Interlocked.CompareExchange(ref sending, 1, 0) != 0) return false;
         ThreadPool.QueueUserWorkItem(_ =>
         {
             try { if (meta != null) Write(1, Encoding.UTF8.GetBytes(meta)); Write(2, jpg); }
             catch { Close(); }
             finally { Interlocked.Exchange(ref sending, 0); }
         });
+        return true;
     }
     // читаем кадры клиента: закрытие и ping
     public void ReadLoop()
@@ -373,7 +384,7 @@ abstract class Feed
         bool changed = m != meta; meta = m;
         W = w; H = h; SrcFps = fps; Interlocked.Increment(ref sentN);
         WsClient[] list; lock (Clients) list = Clients.ToArray();
-        foreach (var c in list) { var send = changed || c.NeedMeta ? m : null; c.NeedMeta = false; c.SendFrame(send, jpg); }
+        foreach (var c in list) { var send = changed || c.NeedMeta ? m : null; if (c.SendFrame(send, jpg)) c.NeedMeta = false; else if (send != null) c.NeedMeta = true; }
     }
 }
 class NdiFeed : Feed
@@ -393,7 +404,10 @@ class NdiFeed : Feed
             var v = new Ndi.Video();
             int type = Ndi.NDIlib_recv_capture_v2(inst, ref v, IntPtr.Zero, IntPtr.Zero, 200);
             if (type != Ndi.FRAME_VIDEO || v.p_data == IntPtr.Zero) continue;
-            if (ClientCount > 0 && Interlocked.Increment(ref inflight) <= Pipe)
+            // ClientCount читаем один раз: зритель может уйти между проверками (debugger: счётчик уходил в −1,
+            // NDIlib_recv_destroy вызывался, пока последний кадр ещё сжимался)
+            bool inc = ClientCount > 0;
+            if (inc && Interlocked.Increment(ref inflight) <= Pipe)
             {
                 var fr = v;
                 // кадр читается прямо из памяти NDI и возвращается NDI после сжатия
@@ -403,7 +417,7 @@ class NdiFeed : Feed
                     finally { Ndi.NDIlib_recv_free_video_v2(inst, ref fr); Interlocked.Decrement(ref inflight); }
                 });
             }
-            else { Interlocked.Decrement(ref inflight); Ndi.NDIlib_recv_free_video_v2(inst, ref v); }
+            else { if (inc) Interlocked.Decrement(ref inflight); Ndi.NDIlib_recv_free_video_v2(inst, ref v); }
         }
         while (Thread.VolatileRead(ref inflight) > 0) Thread.Sleep(10);
         Ndi.NDIlib_recv_destroy(inst);
@@ -453,14 +467,16 @@ class SpoutFeed : Feed
 // ---------- сервер ----------
 static class Server
 {
-    public const string Version = "0.4.0";
+    public const string Version = "0.4.1";
     public static int Port = 47800;
     public static bool EN;
     public static string T(string ru, string en) { return EN ? en : ru; }
     public static Action<string> OnLog = s => { };
     public static void Log(string s) { try { OnLog(s); } catch { } }
     const string NdiP = "NDI · ", SpoutP = "Spout · ";
-    static readonly Regex Origins = new Regex(@"^(https://(www\.)?ledbrain\.pro|https://led\.gladkovegor\.ru|http://(localhost|127\.0\.0\.1)(:\d+)?)$");
+    // старый led.gladkovegor.ru не доверяем: он только перенаправляет на ledbrain.pro (Redirect Rule в Cloudflare);
+    // потеря домена дала бы новому владельцу видео со всех Bridge (debugger)
+    static readonly Regex Origins = new Regex(@"^(https://(www\.)?ledbrain\.pro|http://(localhost|127\.0\.0\.1):(8792|8787|8793))$"); // localhost — только порты разработки LEDBRAIN (debugger: любой локальный веб-интерфейс получал видео)
     static readonly Dictionary<string, Feed> feeds = new Dictionary<string, Feed>();
     static TcpListener listener;
     public static volatile bool Running;
@@ -506,11 +522,15 @@ static class Server
             new Thread(() => Handle(c)) { IsBackground = true }.Start();
         }
     }
+    static int conns; // открытых соединений: больше 64 — новые закрываются (локальный процесс не исчерпает потоки)
     static void Handle(TcpClient c)
     {
+        if (Interlocked.Increment(ref conns) > 64) { Interlocked.Decrement(ref conns); try { c.Close(); } catch { } return; }
         try
         {
             c.NoDelay = true;
+            // заголовки — за 5 с, иначе соединение закрывается; после перехода на WebSocket таймаут снимается (debugger)
+            c.ReceiveTimeout = 5000;
             var s = c.GetStream();
             var head = ReadHead(s);
             if (head == null) { c.Close(); return; }
@@ -520,6 +540,8 @@ static class Server
             string method = req[0], path = req[1];
             var hd = new Dictionary<string, string>();
             foreach (var l in lines.Skip(1)) { int i = l.IndexOf(':'); if (i > 0) hd[l.Substring(0, i).Trim().ToLowerInvariant()] = l.Substring(i + 1).Trim(); }
+            string host; hd.TryGetValue("host", out host);
+            if (host != "127.0.0.1:" + Port && host != "localhost:" + Port) { Reply(s, "403 Forbidden", "", "text/plain", ""); c.Close(); return; }
             string origin; hd.TryGetValue("origin", out origin);
             bool ok = string.IsNullOrEmpty(origin) || Origins.IsMatch(origin);
             string cors = ok && !string.IsNullOrEmpty(origin) ? "Access-Control-Allow-Origin: " + origin + "\r\nVary: Origin\r\nAccess-Control-Allow-Private-Network: true\r\n" : "";
@@ -536,6 +558,7 @@ static class Server
                 var hb = Encoding.ASCII.GetBytes(hs); s.Write(hb, 0, hb.Length);
                 var q = path.IndexOf("src=") >= 0 ? Uri.UnescapeDataString(path.Substring(path.IndexOf("src=") + 4).Split('&')[0].Replace('+', ' ')) : "";
                 var ws = new WsClient(c, s);
+                c.ReceiveTimeout = 0;
                 var feed = Subscribe(q, ws);
                 if (feed == null) { ws.SendText(json.Serialize(new Dictionary<string, object> { { "error", "nosource" }, { "src", q } })); ws.Close(); return; }
                 ws.ReadLoop(); // до закрытия
@@ -545,6 +568,7 @@ static class Server
             Reply(s, "404 Not Found", cors, "application/json", "{}"); c.Close();
         }
         catch { try { c.Close(); } catch { } }
+        finally { Interlocked.Decrement(ref conns); }
     }
     static string ReadHead(Stream s)
     {
